@@ -1,0 +1,63 @@
+name: Build
+on:
+  schedule:
+    - cron: "4 23 * * 0"
+  push:
+    branches:
+      - main
+env:
+  GH_TOKEN: ${{ github.token }}
+  
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 0
+
+      - name: Check and release
+        run: |
+            rm -fr * .git .github
+            sudo snap install go --classic
+            gh repo clone caddyserver/caddy
+            cd caddy/cmd/caddy
+            cat <<EOF > main.go
+            package main
+
+            import (
+               caddycmd "github.com/caddyserver/caddy/v2/cmd"
+
+               // Plug in Caddy modules here
+               _ "github.com/caddyserver/caddy/v2/modules/standard"
+               _ "github.com/caddy-dns/cloudflare"
+            )
+
+            func main() {
+              caddycmd.Main()
+            }
+            EOF
+            
+            go mod tidy
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -buildid= -extldflags=-static" -o  ${{ github.workspace }}/caddy-linux-amd64 
+            CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -buildid= -extldflags=-static" -o  ${{ github.workspace }}/caddy-linux-arm64
+            cd ${{ github.workspace }}
+            rm caddy -rf
+            ./caddy-linux-amd64 list-modules | grep cloudflare
+            #upx --best caddy-linux-amd64 caddy-linux-arm64     
+            mkdir -p .github/workflows
+            wget -qO .github/workflows/blank.yml https://github.com/${{ github.repository }}/raw/main/.github/workflows/blank.yml
+            git config --global init.defaultBranch main
+            git init
+            git add .
+            git config user.name "mainians"
+            git config user.email "61817665+mainians@users.noreply.github.com"
+            git commit -m "caddy amd64 & arm64 binary"
+            git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+            git push origin main --force
